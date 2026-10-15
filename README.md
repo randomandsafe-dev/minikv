@@ -9,7 +9,8 @@ MiniKV 是一个使用 Java 和 Netty 实现的轻量级内存键值数据库。
 - [x] 参数校验
 - [x] 防御性复制
 - [x] 单元测试
-- [ ] RESP协议
+- [x] RESP2协议编解码
+- [x] RESP命令解析
 - [ ] TCP服务器
 - [ ] TTL过期
 - [ ] LRU/LFU
@@ -24,3 +25,4 @@ MiniKV 是一个使用 Java 和 Netty 实现的轻量级内存键值数据库。
 
 ```bash
 mvn test
+```
