@@ -22,22 +22,25 @@ public final class RespDecoder {
     public Decoded decodeOne(byte[] input) {
         Objects.requireNonNull(input, "input must not be null");
         if (input.length == 0) {
-            throw new RespProtocolException("input must not be empty");
+            throw new RespIncompleteException("input must not be empty");
         }
 
         Cursor cursor = new Cursor(input);
-        RespValue value = parseValue(cursor);
+        RespValue value = parseValue(cursor, 0);
         return new Decoded(value, cursor.position);
     }
 
-    private RespValue parseValue(Cursor cursor) {
+    private RespValue parseValue(Cursor cursor, int depth) {
+        if (depth > 128) {
+            throw new RespProtocolException("RESP nesting is too deep");
+        }
         byte type = cursor.readByte("missing RESP type");
         return switch (type) {
             case '+' -> new RespSimpleString(cursor.readUtf8Line());
             case '-' -> new RespError(cursor.readUtf8Line());
             case ':' -> new RespInteger(parseNumber(cursor.readAsciiLine()));
             case '$' -> parseBulkString(cursor);
-            case '*' -> parseArray(cursor);
+            case '*' -> parseArray(cursor, depth);
             default -> throw new RespProtocolException(
                     "unsupported RESP type byte: " + printable(type)
             );
@@ -58,7 +61,7 @@ public final class RespDecoder {
         return RespBulkString.of(value);
     }
 
-    private RespArray parseArray(Cursor cursor) {
+    private RespArray parseArray(Cursor cursor, int depth) {
         long size = parseLength(cursor.readAsciiLine(), "array");
         if (size == -1) {
             return RespArray.nullValue();
@@ -71,7 +74,7 @@ public final class RespDecoder {
         // could otherwise force a large allocation before sending elements.
         List<RespValue> values = new ArrayList<>();
         for (int index = 0; index < size; index++) {
-            values.add(parseValue(cursor));
+            values.add(parseValue(cursor, depth + 1));
         }
         return RespArray.of(values);
     }
@@ -131,7 +134,7 @@ public final class RespDecoder {
 
         private byte readByte(String errorMessage) {
             if (position >= input.length) {
-                throw new RespProtocolException(errorMessage);
+                throw new RespIncompleteException(errorMessage);
             }
             return input[position++];
         }
@@ -146,20 +149,29 @@ public final class RespDecoder {
 
         private byte[] readLine() {
             int start = position;
-            for (int index = position; index < input.length - 1; index++) {
-                if (input[index] == '\r' && input[index + 1] == '\n') {
+            for (int index = position; index < input.length; index++) {
+                if (input[index] == '\n') {
+                    throw new RespProtocolException("RESP line must end with CRLF");
+                }
+                if (input[index] == '\r') {
+                    if (index + 1 == input.length) {
+                        break;
+                    }
+                    if (input[index + 1] != '\n') {
+                        throw new RespProtocolException("RESP line must end with CRLF");
+                    }
                     position = index + 2;
                     return Arrays.copyOfRange(input, start, index);
                 }
             }
-            throw new RespProtocolException(
+            throw new RespIncompleteException(
                     "incomplete RESP line at index " + start
             );
         }
 
         private byte[] readBytes(int length) {
             if (input.length - position < length) {
-                throw new RespProtocolException(
+                throw new RespIncompleteException(
                         "bulk string payload is incomplete"
                 );
             }
@@ -173,12 +185,15 @@ public final class RespDecoder {
         }
 
         private void requireCrlf() {
-            if (input.length - position < 2
-                    || input[position] != '\r'
-                    || input[position + 1] != '\n') {
+            int remaining = input.length - position;
+            if ((remaining >= 1 && input[position] != '\r')
+                    || (remaining >= 2 && input[position + 1] != '\n')) {
                 throw new RespProtocolException(
                         "bulk string payload must end with CRLF"
                 );
+            }
+            if (remaining < 2) {
+                throw new RespIncompleteException("bulk string terminator is incomplete");
             }
             position += 2;
         }

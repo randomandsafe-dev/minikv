@@ -88,6 +88,24 @@ class RespDecoderTest {
     }
 
     @Test
+    void shouldDistinguishIncompleteInputFromMalformedInput() {
+        for (String input : List.of("", "$1\r\na", "$1\r\na\r", "*1\r\n", "+OK\r")) {
+            assertThrows(RespIncompleteException.class, () -> decoder.decode(ascii(input)));
+        }
+        for (String input : List.of("$1\r\naX", "$1\r\na\rX", "+OK\n", "+OK\rX", ":abc\r\n")) {
+            RespProtocolException exception = assertThrows(RespProtocolException.class,
+                    () -> decoder.decode(ascii(input)));
+            assertTrue(!(exception instanceof RespIncompleteException));
+        }
+    }
+
+    @Test
+    void shouldRejectExcessiveNesting() {
+        assertThrows(RespProtocolException.class,
+                () -> decoder.decode(ascii("*1\r\n".repeat(130) + "+OK\r\n")));
+    }
+
+    @Test
     void shouldRejectIncompleteAndMalformedInput() {
         assertThrows(
                 RespProtocolException.class,

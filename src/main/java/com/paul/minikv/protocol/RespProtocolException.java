@@ -1,6 +1,6 @@
 package com.paul.minikv.protocol;
 
-public final class RespProtocolException extends IllegalArgumentException {
+public class RespProtocolException extends IllegalArgumentException {
 
     public RespProtocolException(String message) {
         super(message);
