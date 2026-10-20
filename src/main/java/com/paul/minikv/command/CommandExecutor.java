@@ -26,8 +26,9 @@ public final class CommandExecutor {
         int count = command.argumentCount();
         boolean validArity = switch (name) {
             case "PING" -> count <= 1;
-            case "SET" -> count == 2;
-            case "GET" -> count == 1;
+            case "SET" -> count == 2 || count == 4;
+            case "EXPIRE" -> count == 2;
+            case "GET", "TTL" -> count == 1;
             case "DEL", "EXISTS" -> count >= 1;
             default -> true;
         };
@@ -41,9 +42,20 @@ public final class CommandExecutor {
                 case "PING" -> count == 0 ? new RespSimpleString("PONG")
                         : RespBulkString.of(command.argument(0));
                 case "SET" -> {
-                    storage.set(key(command.argument(0)), command.argument(1));
+                    String key = key(command.argument(0));
+                    if (count == 2) {
+                        storage.set(key, command.argument(1));
+                    } else {
+                        if (!new String(command.argument(2), StandardCharsets.US_ASCII).equalsIgnoreCase("EX")) {
+                            throw new IllegalArgumentException("syntax error");
+                        }
+                        storage.set(key, command.argument(1), seconds(command.argument(3)));
+                    }
                     yield new RespSimpleString("OK");
                 }
+                case "EXPIRE" -> new RespInteger(storage.expire(key(command.argument(0)),
+                        seconds(command.argument(1))) ? 1 : 0);
+                case "TTL" -> new RespInteger(storage.ttl(key(command.argument(0))));
                 case "GET" -> storage.get(key(command.argument(0)))
                         .map(RespBulkString::of).orElseGet(RespBulkString::nullValue);
                 case "DEL", "EXISTS" -> {
@@ -64,6 +76,18 @@ public final class CommandExecutor {
             };
         } catch (IllegalArgumentException exception) {
             return new RespError("ERR " + exception.getMessage().replace('\r', ' ').replace('\n', ' '));
+        }
+    }
+
+    private static long seconds(byte[] bytes) {
+        String value = new String(bytes, StandardCharsets.US_ASCII);
+        if (!value.matches("-?[0-9]+")) {
+            throw new IllegalArgumentException("value is not an integer or out of range");
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("value is not an integer or out of range", exception);
         }
     }
 

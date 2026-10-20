@@ -2,6 +2,7 @@ package com.paul.minikv.server;
 
 import com.paul.minikv.protocol.*;
 import com.paul.minikv.storage.InMemoryStorage;
+import com.paul.minikv.support.MutableClock;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -18,6 +19,55 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(20)
 class MiniKvServerTest {
+
+    @Test
+    void shouldShareExpiryAcrossClientsAndRecoverFromInvalidExpiry() throws Exception {
+        MutableClock clock = new MutableClock();
+        try (MiniKvServer server = new MiniKvServer("127.0.0.1", 0, new InMemoryStorage(clock)).start();
+             Socket first = connect(server); Socket second = connect(server)) {
+            send(first, "SET", "session", "token", "EX", "2");
+            assertEquals(new RespSimpleString("OK"), read(first));
+            send(second, "GET", "session");
+            assertEquals(bulk("token"), read(second));
+            send(second, "TTL", "session");
+            assertEquals(new RespInteger(2), read(second));
+            clock.advanceMillis(1000);
+            send(second, "EXPIRE", "session", "3");
+            assertEquals(new RespInteger(1), read(second));
+            clock.advanceMillis(2999);
+            send(first, "GET", "session");
+            assertEquals(bulk("token"), read(first));
+            clock.advanceMillis(1);
+            send(first, "GET", "session");
+            assertEquals(RespBulkString.nullValue(), read(first));
+            send(second, "EXISTS", "session");
+            assertEquals(new RespInteger(0), read(second));
+            send(second, "TTL", "session");
+            assertEquals(new RespInteger(-2), read(second));
+
+            ByteArrayOutputStream pipeline = new ByteArrayOutputStream();
+            for (byte[] request : new byte[][]{command("SET", "key", "value", "EX", "5"),
+                    command("SET", "key", "bad", "EX", "0"), command("EXPIRE", "key", "1.5"),
+                    command("GET", "key"), command("TTL", "key"), command("PING")}) {
+                pipeline.writeBytes(request);
+            }
+            first.getOutputStream().write(pipeline.toByteArray());
+            first.getOutputStream().flush();
+            assertEquals(new RespSimpleString("OK"), read(first));
+            assertInstanceOf(RespError.class, read(first));
+            assertInstanceOf(RespError.class, read(first));
+            assertEquals(bulk("value"), read(first));
+            assertEquals(new RespInteger(5), read(first));
+            assertEquals(new RespSimpleString("PONG"), read(first));
+            send(second, "SET", "key", "persistent");
+            assertEquals(new RespSimpleString("OK"), read(second));
+            clock.advanceMillis(5000);
+            send(first, "GET", "key");
+            assertEquals(bulk("persistent"), read(first));
+            send(first, "TTL", "key");
+            assertEquals(new RespInteger(-1), read(first));
+        }
+    }
 
     @Test
     void shouldServeCrudOverTcpAndShareDataAcrossClients() throws Exception {
