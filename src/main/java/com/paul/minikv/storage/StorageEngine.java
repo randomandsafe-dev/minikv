@@ -21,6 +21,6 @@ public interface StorageEngine {
 
     boolean exists(String key);
 
-    /** Cleans up expired entries and counts live keys; weakly consistent during concurrent writes. */
+    /** Cleans up expired entries and counts live keys. */
     long size();
 }

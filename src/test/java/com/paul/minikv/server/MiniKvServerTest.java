@@ -21,6 +21,56 @@ import static org.junit.jupiter.api.Assertions.*;
 class MiniKvServerTest {
 
     @Test
+    void shouldShareLruAcrossClientsAndReclaimExpiredKeysBeforeEviction() throws Exception {
+        MutableClock clock = new MutableClock();
+        InMemoryStorage storage = new InMemoryStorage(clock, 2);
+        try (MiniKvServer server = new MiniKvServer("127.0.0.1", 0, storage).start();
+             Socket first = connect(server); Socket second = connect(server)) {
+            send(first, "SET", "a", "1");
+            assertEquals(new RespSimpleString("OK"), read(first));
+            send(first, "SET", "b", "2", "EX", "10");
+            assertEquals(new RespSimpleString("OK"), read(first));
+            send(second, "GET", "a");
+            assertEquals(bulk("1"), read(second));
+            send(second, "SET", "c", "3", "EX", "1");
+            assertEquals(new RespSimpleString("OK"), read(second));
+            send(first, "GET", "b");
+            assertEquals(RespBulkString.nullValue(), read(first));
+            send(first, "TTL", "b");
+            assertEquals(new RespInteger(-2), read(first));
+            send(first, "EXPIRE", "b", "100");
+            assertEquals(new RespInteger(0), read(first));
+            send(first, "EXISTS", "a", "c");
+            assertEquals(new RespInteger(2), read(first));
+
+            clock.advanceMillis(1000);
+            send(first, "SET", "d", "4");
+            assertEquals(new RespSimpleString("OK"), read(first));
+            send(second, "EXISTS", "a", "d");
+            assertEquals(new RespInteger(2), read(second));
+            send(second, "GET", "c");
+            assertEquals(RespBulkString.nullValue(), read(second));
+
+            // Invalid writes at capacity must not evict a key or change its recency.
+            send(second, "SET", "a", "bad", "EX", "9223372036854775807");
+            assertInstanceOf(RespError.class, read(second));
+            send(second, "SET", "invalid", "bad", "EX", "0");
+            assertInstanceOf(RespError.class, read(second));
+            send(second, "EXISTS", "a", "d", "invalid");
+            assertEquals(new RespInteger(2), read(second));
+            send(second, "SET", "e", "5");
+            assertEquals(new RespSimpleString("OK"), read(second));
+            send(first, "GET", "a");
+            assertEquals(RespBulkString.nullValue(), read(first));
+            send(first, "GET", "d");
+            assertEquals(bulk("4"), read(first));
+            send(first, "GET", "e");
+            assertEquals(bulk("5"), read(first));
+            assertEquals(2, storage.size());
+        }
+    }
+
+    @Test
     void shouldShareExpiryAcrossClientsAndRecoverFromInvalidExpiry() throws Exception {
         MutableClock clock = new MutableClock();
         try (MiniKvServer server = new MiniKvServer("127.0.0.1", 0, new InMemoryStorage(clock)).start();
